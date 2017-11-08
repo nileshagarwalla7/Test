@@ -180,7 +180,7 @@ try :
 	global search_string
 	search_string = pos0+"_"+pos1 #storing locale in 'en_US' format
 	required_row = status_table.filter(status_table.Locale == search_string).filter("brand like 'Brand Expedia'").collect() #finding out the rows that contain the brand Expedia only
-  
+
 	global process_id
 	global process_name 
 	process_id = required_row[0]['id']  #ID of the particular row
@@ -201,8 +201,8 @@ try :
 			success_str='Live Test Sends completed'
 			failure_str='Live Test Sends failed'
 		else:
-			CentralLog_str='Orchestration.dbo.CentralLog_BACKUP'
-			AlphaProcessDetailsLog_str='Orchestration.dbo.AlphaProcessDetailsLog_BACKUP'
+			CentralLog_str='Orchestration.dbo.CentralLog'
+			AlphaProcessDetailsLog_str='Orchestration.dbo.AlphaProcessDetailsLog'
 			success_str='Campaign Suppression process completed'
 			failure_str='Campaign Suppression process failed'
 	
@@ -867,7 +867,7 @@ else :
 StartDate = get_pst_date()
 ### selecting the required columns from meta campaign data and creating dictionary
 col_list = ['campaign_id','slot_position','var_structure','var_source','var_position','module_id','module_type_id'
-				 ,'module_priority_in_slot','segment_type_id','version','ttl_versions']
+				 ,'module_priority_in_slot','segment_type_id','version','ttl_versions','source_connection']
 
 
 dict_cpgn = sc.broadcast(dfMetaCampaignData_VarDef[dfMetaCampaignData_VarDef.var_position.isNotNull()]
@@ -1070,8 +1070,10 @@ def module_info(map_dict1):
 						 test_dict = {"dummy#dummy":"dummy"}
 					
 					else:
-						 test = dict_cpgn_new.value[dict_cpgn_new.value.module_id == int(module_id)][['var_source','var_position','var_structure']]
-						 col_req = ['var_source','var_position']
+						 test = dict_cpgn_new.value[dict_cpgn_new.value.module_id == int(module_id)][['var_source',
+																									  'var_position',
+																									  'var_structure','source_connection']]
+						 col_req = ['var_source','var_position','source_connection']
 						 test.index = (test[col_req]
 												.astype(str)
 												.apply(lambda x : '#'.join(x), axis=1))
@@ -1130,214 +1132,220 @@ cpgn_prio_dict = cpgn_prio_pd.to_dict()['priority']
 ##Populating None instead of default content
 
 print("------------started content map function")
+import json
+
+def set_dynamic_content_value(dictionary, key, value):
+	unacceptable_values = ['value_not_found', 'nan', 'none']
+	comparison_value = value.lower()
+	if(not (comparison_value in unacceptable_values)):
+		dictionary[key] = value
+
 
 def content_map(row):
 
-	#import re
 	import datetime
+
 	seed = datetime.date.today().isocalendar()[1] + datetime.datetime.today().weekday()
-    #import sys
-    #reload(sys)
-    #sys.setdefaultencoding('UTF-8')
-
-
 	dict_req = {'key':row['key']}
 	cpgn_id = row['campaign_id']
 	number_slots = row['number_slots']
 	OmniExtension = ""
 	campaign_priority_ls = []
 	module_id_ls = []
+	dynamic_content_value = {}
 
 	for slot_position in slot_list:
 
-			 map_dict1 = row['map_dict1'][str(slot_position)]  #moduletypeid##priority->moduleid
-			 slot_position = str(slot_position)
-			 df = pd.DataFrame()
-			 map_dict1 = {key_mod:map_dict1[key_mod] for key_mod in map_dict1 if map_dict1[key_mod] not in module_id_ls} #trying to map for each unique module id
-			 flag_dummy = 0
+		map_dict1 = row['map_dict1'][str(slot_position)]  #moduletypeid##priority->moduleid
+		slot_position = str(slot_position)
+		df = pd.DataFrame()
+		map_dict1 = {key_mod:map_dict1[key_mod] for key_mod in map_dict1 if map_dict1[key_mod] not in module_id_ls} #trying to map for each unique module id
+		flag_dummy = 0
 
-			 if (len(map_dict1.keys())>0) and (list(map_dict1.keys())[0].find("dummy")>=0)  :flag_dummy = 1
-
-
-			 if flag_dummy == 0:
-					for key1 in  map_dict1:
-						 map_dict = row['map_dict'][map_dict1[key1]] #var
-
-						 var_positions = slot_position_map[int(slot_position)]
-
-						 x_dict = {('S'+slot_position+'_P'+str(int(v))):'' for v in range(1,var_positions+1)}  #{S1P1:'',S1P2:''...}
-
-						 x_dict['S'+slot_position+'_module_priority'] = int(key1.split('#')[1]) #Gets the module priority as the value
-						 x_dict['S'+slot_position+'_module_id'] = int(map_dict1[key1])  #Gets the module id as the value. This is where if there are two values(module_type_id eg.), they are mapped randomly
-						 x_dict['S'+slot_position+'_att_option'] = ''
-
-						 for key in map_dict:
-
-								join_key =  key.split('#')[0]
-								var_pos =str(key.split('#')[1])
-
-								slot_var_pos = 'S'+slot_position+'_P'+(var_pos) #Assigning the Slot_Pos Name
-
-								if( len(join_key.split('|')) > 1):
-									file_name =  join_key.split('|')[1].split(';')[0].split('.')[0]
-									left_keys = [col.split('.')[1] for col in join_key.split('|')[0].split(';')]
-									right_keys = [col.split('.')[1] for col in join_key.split('|')[1].split(';')]
+		if (len(map_dict1.keys())>0) and (list(map_dict1.keys())[0].find("dummy")>=0)  :flag_dummy = 1
 
 
-								else :
-									file_name =  'NA'
-									left_keys = 'NA'
-									right_keys = 'NA'
+		if flag_dummy == 0:
+			for key1 in  map_dict1:
+				map_dict = row['map_dict'][map_dict1[key1]] #var
 
-								if map_dict[key] == None :
-									var_value = ""
+				var_positions = slot_position_map[int(slot_position)]
 
-								elif (map_dict[key] != None) and (len(map_dict[key]) == 0) :
-									var_value = ""
+				x_dict = {('S'+slot_position+'_P'+str(int(v))):'' for v in range(1,var_positions+1)}  #{S1P1:'',S1P2:''...}
 
-								elif(len(map_dict[key].split('%%')) == 1):
-										var_value = map_dict[key]
+				x_dict['S'+slot_position+'_module_priority'] = int(key1.split('#')[1]) #Gets the module priority as the value
+				x_dict['S'+slot_position+'_module_id'] = int(map_dict1[key1])  #Gets the module id as the value. This is where if there are two values(module_type_id eg.), they are mapped randomly
+				x_dict['S'+slot_position+'_att_option'] = ''
 
-								else :  
-									z = [m.start() for m in re.finditer('%%', map_dict[key])]  #gives the index where '%%' is present in the form of a list
-									var_value = map_dict[key] #varsource##varposition->varstructure
+				for key in map_dict:
 
-									j = 0
-									while (j <= len(z)-2):
-											 temp = map_dict[key][z[j]+2:z[j+1]] # eg. traveler.origincity
-											 df_name = temp.split('.')[0] #table
+					join_key =  key.split('#')[0]
+					var_pos =str(key.split('#')[1])
+					var_source_connection = key.split('#')[2]
+					column_values = []
+					is_dynamic_column_present = False
 
+					slot_var_pos = 'S'+slot_position+'_P'+(var_pos) #Assigning the Slot_Pos Name
 
-											 if (df_name == 'traveler'):	#when the table name is traveler
+					if( len(join_key.split('|')) > 1):
+						file_name =  join_key.split('|')[1].split(';')[0].split('.')[0]
+						left_keys = [col.split('.')[1] for col in join_key.split('|')[0].split(';')]
+						right_keys = [col.split('.')[1] for col in join_key.split('|')[1].split(';')]
 
-													trav_attri = str(row[temp.split('.')[1]])   #getting the column name
-
-													if trav_attri == '':
-														 trav_attri = "value_not_found"
-
-													var_value = var_value.replace(temp,trav_attri)	  #replacing the temp string in var_value with trav_attri which is the column name
-
-
-											 else :
-
-													travel_data = "".join([str(row[i]) for i in left_keys ])  #Gets the data from the columns mentioned in left_keys
-													mod_id_map = x_dict['S'+slot_position+'_module_id']  #module id
-													try : 
-														 value_re = mis_content_dict[str(mod_id_map)+df_name+''.join(right_keys)+var_pos][temp.split('.')[1]][travel_data]
-														 #value_re contains the data/value. It first accesses the dictionary, finds the column and obtains the data for the column
-													except : value_re = ''
-
-													if value_re == '':
-																value_re = "value_not_found"
-
-
-													var_value = var_value.replace(temp,str(value_re))
-
-											 j+=2
-
-								x_total = var_value.replace('%%','')
-				
-								ttl_options = len(x_total.split("|"))  #no. of options 
-
-								if (ttl_options > 2):
-									att = int((int(row['test_keys'])+ seed%(ttl_options-1))%(ttl_options-1))  #changes on a daily basis. 
-								else:
-									att = 0
-
-								x_dict[slot_var_pos] = x_total.split('|')[0]
-								
-
-								if (ttl_options<=1): 
-									if ( slot_var_pos == "S1_P1"):
-										x_dict[slot_var_pos] = x_total.split('|')[0]	   #for att 'default' it has been changed to 'None'
-									else:
-										x_dict[slot_var_pos] = "None"	   #for att 'default' it has been changed to 'None'
-									att = 'default'
-								elif ((ttl_options==2)):
-									x_dict[slot_var_pos] = x_total.split('|')[1]
-								else :
-									list_value = x_total.split('|')[1:]
-									x_dict[slot_var_pos] = list_value[att] 
-
-								x = x_dict[slot_var_pos]
-								placement_type_mp = suppress_dict['placement_type'][int(x_dict['S'+slot_position+'_module_id'])]
-								default_flag_mp = suppress_dict['default'][int(x_dict['S'+slot_position+'_module_id'])]
-
-								if ((x.lower().find('value_not_found') >= 0) or (x.lower().find('none') >= 0) or (x.find('NaN') >= 0) or (x.find('nan') >=0 )
-					or (x.lower().find('null') >= 0) ):
-									if ( slot_var_pos == "S1_P1"):
-										x_dict[slot_var_pos] = x_total.split('|')[0]	   #for att 'default' it has been changed to 'None'
-									else:
-										x_dict[slot_var_pos] = "None"	   #for att 'default' it has been changed to 'None'
-									att = 'default'
-									if ((placement_type_mp in ('hero','banner')) and (default_flag_mp == 0)) :
-											 x_dict['S'+slot_position+'_module_priority'] = 9999
-
-
-								x_dict['S'+slot_position+'_module_type_id'] = str(key1.split('#')[0])
-
-								x_dict['S'+slot_position+'_att_option'] = x_dict['S'+slot_position+'_att_option'] +'#'+slot_var_pos+'.'+str(att)
-
-
-						 temp = pd.DataFrame(x_dict,index=[x_dict['S'+slot_position+'_module_priority']])
-
-						 df = df.append(temp) 
-					
-					#here module_type_id can be randomly allocated as it doesn't contain the logic of choosing the module_type_id based on its priority as can be found in the else function below
-					if len(df) == 0:
-						 var_positions = slot_position_map[int(slot_position)]
-						 x_dict = {('S'+slot_position+'_P'+str(int(v))):"None" for v in range(1,var_positions+1)}  #slot var pos has been changed to none
-						 x_dict['S'+slot_position+'_module_priority'] = "pixel_module"
-						 mod_id = '999'
-						 x_dict['S'+slot_position+'_module_id'] = int(mod_id)   #haven't changed pixel_module to null. only slot var position has to be changed
-						 x_dict['S'+slot_position+'_att_option'] = "pixel_module"
-						 x_dict['S'+slot_position+'_module_type_id'] = "pixel_module"
-						 campaign_priority = int(cpgn_prio_dict[cpgn_id])  #campaign id is mapped to campaign priority
-						 campaign_priority_ls += [campaign_priority] #List of campaign priority is made
-						 dict_req.update(x_dict)
 
 					else :
-						 final_df = df.loc[[df['S'+slot_position+'_module_priority'].idxmin()]]	
-						 col_name = list(final_df['S'+slot_position+'_module_priority'])[0]
+						file_name =  'NA'
+						left_keys = 'NA'
+						right_keys = 'NA'
 
-						 mod_id = final_df['S'+slot_position+'_module_id'].iloc[0]
-						 final_dict = final_df.transpose().to_dict()[col_name]
+					if map_dict[key] == None :
+						var_value = ""
 
-						 module_id = str(final_dict['S{}_module_id'.format(slot_position)])
-						 placement_type = suppress_dict['placement_type'][int(module_id)]
-						 module_type = suppress_dict['module_type'][int(module_id)]
-						 default_flag = suppress_dict['default'][int(module_id)]
-						 campaign_priority = int(cpgn_prio_dict[cpgn_id])
+					elif (map_dict[key] != None) and (len(map_dict[key]) == 0) :
+						var_value = ""
 
-						 if final_df['S'+slot_position+'_module_priority'].iloc[0] == 9999 :
+					elif(len(map_dict[key].split('%%')) == 1):
+						var_value = map_dict[key]
 
-								if ((default_flag == 0) and (placement_type == 'hero')) : 
-									campaign_priority = 9999
-								elif ((default_flag == 0) and (placement_type == 'banner')):
-									mod_id = '999'
-									final_dict['S'+slot_position+'_module_id'] = int(mod_id)
-									for i in range(1,var_positions+1):
-											 final_dict['S'+slot_position+'_P'+str(int(i))] = "None"	#has been changed to 'None' for default flag =0 and placement_type = 'banner'
+					else :
+						is_dynamic_column_present = True
+						z = [m.start() for m in re.finditer('%%', map_dict[key])]  #gives the index where '%%' is present in the form of a list
+						var_value = map_dict[key] #varsource##varposition->varstructure
 
-						 campaign_priority_ls += [campaign_priority]
+						j = 0
+						while (j <= len(z)-2):
+							temp = map_dict[key][z[j]+2:z[j+1]] # eg. traveler.origincity
+							df_name = temp.split('.')[0] #table
+							attribute_name = str(temp.split('.')[1])
 
-						 dict_req.update(final_dict)
+							if (df_name == 'traveler'):	#when the table name is traveler
+								trav_attri = row[temp.split('.')[1]]   #getting the column name
+								if trav_attri == '':
+									trav_attri = "value_not_found"
+								if(trav_attri is None):
+									trav_attri = "value_not_found"
+								var_value = var_value.replace(temp,trav_attri)	  #replacing the temp string in var_value with trav_attri which is the column name
+								set_dynamic_content_value(dynamic_content_value, "{}_1".format(attribute_name), trav_attri)
+							else :
 
-			 else :	 #filling the slots where flag_dummy=1
-					var_positions = slot_position_map[int(slot_position)]
-					x_dict = {('S'+slot_position+'_P'+str(int(v))):"None" for v in range(1,var_positions+1)}	#when flag_dummy =1 then slot var pos has been changed to 'None'
-					x_dict['S'+slot_position+'_module_priority'] = "dummy"
-					mod_id = "999"		  #dummy still exists for module priority, att option and module type id
-					x_dict['S'+slot_position+'_module_id'] = int(mod_id)
-					x_dict['S'+slot_position+'_att_option'] = "dummy"
-					x_dict['S'+slot_position+'_module_type_id'] = "dummy"
-					campaign_priority = int(cpgn_prio_dict[cpgn_id])
-					campaign_priority_ls += [campaign_priority]
-					dict_req.update(x_dict)
+								travel_data = "".join([str(row[i]) for i in left_keys ])  #Gets the data from the columns mentioned in left_keys
+								mod_id_map = x_dict['S'+slot_position+'_module_id']  #module id
+								try :
+									value_re = mis_content_dict[str(mod_id_map)+df_name+''.join(right_keys)+var_pos][temp.split('.')[1]][travel_data]
+									#value_re contains the data/value. It first accesses the dictionary, finds the column and obtains the data for the column
+								except : value_re = ''
+								if value_re == '':
+									value_re = "value_not_found"
+								if value_re is None:
+									value_re = "value_not_found"
+								var_value = var_value.replace(temp,str(value_re))
+								set_dynamic_content_value(dynamic_content_value,"{}_{}".format(attribute_name, var_source_connection),value_re)
+							j+=2
 
-			 if (int(slot_position) < number_slots): OmniExtension += (slot_position+'.'+str(mod_id)+'_')
-			 else : OmniExtension += (slot_position+'.'+str(mod_id))
-			 module_id_ls.append(str(mod_id))  
+					x_total = var_value.replace('%%','')
+
+					ttl_options = len(x_total.split("|"))  #no. of options
+
+					if (ttl_options > 2):
+						att = int((int(row['test_keys'])+ seed%(ttl_options-1))%(ttl_options-1))  #changes on a daily basis.
+					else:
+						att = 0
+
+					x_dict[slot_var_pos] = x_total.split('|')[0]
+
+
+					if (ttl_options<=1):
+						if ( slot_var_pos == "S1_P1"):
+							x_dict[slot_var_pos] = x_total.split('|')[0]	   #for att 'default' it has been changed to 'None'
+						else:
+							x_dict[slot_var_pos] = "None"	   #for att 'default' it has been changed to 'None'
+						att = 'default'
+					elif ((ttl_options==2)):
+						x_dict[slot_var_pos] = x_total.split('|')[1]
+					else :
+						list_value = x_total.split('|')[1:]
+						x_dict[slot_var_pos] = list_value[att]
+
+					x = x_dict[slot_var_pos]
+					placement_type_mp = suppress_dict['placement_type'][int(x_dict['S'+slot_position+'_module_id'])]
+					default_flag_mp = suppress_dict['default'][int(x_dict['S'+slot_position+'_module_id'])]
+
+					if ((x.lower().find('value_not_found') >= 0) or (x.lower().find('none') >= 0) or (x.find('NaN') >= 0) or (x.find('nan') >=0 ) or (x.lower().find('null') >= 0) ):
+						if ( slot_var_pos == "S1_P1"):
+							x_dict[slot_var_pos] = x_total.split('|')[0]	   #for att 'default' it has been changed to 'None'
+						else:
+							x_dict[slot_var_pos] = "None"	   #for att 'default' it has been changed to 'None'
+						att = 'default'
+						if ((placement_type_mp in ('hero','banner')) and (default_flag_mp == 0)) :
+							x_dict['S'+slot_position+'_module_priority'] = 9999
+
+
+					x_dict['S'+slot_position+'_module_type_id'] = str(key1.split('#')[0])
+
+					x_dict['S'+slot_position+'_att_option'] = x_dict['S'+slot_position+'_att_option'] +'#'+slot_var_pos+'.'+str(att)
+
+
+				temp = pd.DataFrame(x_dict,index=[x_dict['S'+slot_position+'_module_priority']])
+				df = df.append(temp)
+
+			#here module_type_id can be randomly allocated as it doesn't contain the logic of choosing the module_type_id based on its priority as can be found in the else function below
+			#sometimes the slot might be empty having no modules or dataframe
+			if len(df) == 0:
+				var_positions = slot_position_map[int(slot_position)]
+				x_dict = {('S'+slot_position+'_P'+str(int(v))):"None" for v in range(1,var_positions+1)}  #slot var pos has been changed to none
+				x_dict['S'+slot_position+'_module_priority'] = "pixel_module"
+				mod_id = '999'
+				x_dict['S'+slot_position+'_module_id'] = int(mod_id)   #haven't changed pixel_module to null. only slot var position has to be changed
+				x_dict['S'+slot_position+'_att_option'] = "pixel_module"
+				x_dict['S'+slot_position+'_module_type_id'] = "pixel_module"
+				campaign_priority = int(cpgn_prio_dict[cpgn_id])  #campaign id is mapped to campaign priority
+				campaign_priority_ls += [campaign_priority] #List of campaign priority is made
+				dict_req.update(x_dict)
+
+			else :
+				final_df = df.loc[[df['S'+slot_position+'_module_priority'].idxmin()]]
+				col_name = list(final_df['S'+slot_position+'_module_priority'])[0]
+				mod_id = final_df['S'+slot_position+'_module_id'].iloc[0]
+				final_dict = final_df.transpose().to_dict()[col_name]
+				module_id = str(final_dict['S{}_module_id'.format(slot_position)])
+				placement_type = suppress_dict['placement_type'][int(module_id)]
+				module_type = suppress_dict['module_type'][int(module_id)]
+				default_flag = suppress_dict['default'][int(module_id)]
+				campaign_priority = int(cpgn_prio_dict[cpgn_id])
+
+				if final_df['S'+slot_position+'_module_priority'].iloc[0] == 9999 :
+
+					if ((default_flag == 0) and (placement_type == 'hero')) :
+						campaign_priority = 9999
+					elif ((default_flag == 0) and (placement_type == 'banner')):
+						mod_id = '999'
+						final_dict['S'+slot_position+'_module_id'] = int(mod_id)
+						for i in range(1,var_positions+1):
+							final_dict['S'+slot_position+'_P'+str(int(i))] = "None"	#has been changed to 'None' for default flag =0 and placement_type = 'banner'
+
+				campaign_priority_ls += [campaign_priority]
+				dict_req.update(final_dict)
+
+		else :	 #filling the slots where flag_dummy=1
+			var_positions = slot_position_map[int(slot_position)]
+			x_dict = {('S'+slot_position+'_P'+str(int(v))):"None" for v in range(1,var_positions+1)}	#when flag_dummy =1 then slot var pos has been changed to 'None'
+			x_dict['S'+slot_position+'_module_priority'] = "dummy"
+			mod_id = "999"		  #dummy still exists for module priority, att option and module type id
+			x_dict['S'+slot_position+'_module_id'] = int(mod_id)
+			x_dict['S'+slot_position+'_att_option'] = "dummy"
+			x_dict['S'+slot_position+'_module_type_id'] = "dummy"
+			campaign_priority = int(cpgn_prio_dict[cpgn_id])
+			campaign_priority_ls += [campaign_priority]
+			dict_req.update(x_dict)
+
+		if (int(slot_position) < number_slots): OmniExtension += (slot_position+'.'+str(mod_id)+'_')
+		else : OmniExtension += (slot_position+'.'+str(mod_id))
+		module_id_ls.append(str(mod_id))
+		#Removing the columns for Slot_postion_Map_Position as they are no longer required as per https://jira.sea.corp.expecn.com/jira/browse/RMS-16674
+		for i in range(1, var_positions+1):
+			key = 'S'+slot_position+'_P'+str(int(i))
+			if(key != 'S1_P1'):
+				dict_req.pop(key)
 
 	dict_req['OmniExtension'] = OmniExtension
 	dict_req['OmniExtNewFormat'] = OmniExtension.replace('.','-')
@@ -1345,7 +1353,8 @@ def content_map(row):
 	campaign_priority_ls.sort(reverse=True)
 
 	dict_req['campaign_priority'] = campaign_priority_ls[0]
-	
+	dict_req['dynamic_content'] = json.dumps(dynamic_content_value)
+
 
 	return Row(**dict_req)
 
@@ -1798,15 +1807,13 @@ final_result_moduleCount=(final_result_moduleCount
 			
 final_result_moduleCount=final_result_moduleCount.select([c for c in final_result_moduleCount.columns if c not in {"Subchannel","Program","Campaign_Code","Lob_Intent","BRAND","posa","IssueID","SID","row_id","padded","keyID", "LaunchDate"}])
 
-print("------------Loacale: ", search_string)
-
+print("------------Locale: ", search_string)
 final_result_moduleCount = final_result_moduleCount.drop("locale").withColumn("Locale",lit(search_string))
 final_result_moduleCount.repartition(rep)
 final_result_moduleCount.cache()
 log_rowcount = final_result_moduleCount.count()
 
 log_df_update(sqlContext,1,'Recipient ID generated',get_pst_date(),' ',str(log_rowcount),StartDate,' ',AlphaProcessDetailsLog_str)
-
 print("------------Recipient ID done")
 
 ### Recipient ID generation ends here 
@@ -1864,7 +1871,7 @@ path_ls = []
 cid_ls = []
 filename_ls = []
 sid_ls = []
-#mod_ls = []
+mod_ls = []
 filename_mod_ls = []
 path_mod_ls = []
 
@@ -1910,8 +1917,6 @@ for i in cid:
 		log_df_update(sqlContext,1,'Writing parquet files for CID{} to s3 is Done'.format(i),get_pst_date(),' ',str(num_rows),StartDate,path,AlphaProcessDetailsLog_str)
 		
 		StartDate = get_pst_date()
-		
-		mod_ls = []
 		
 		for j in range(1,mod_cnt+1,1):
 			dis_mod_ls = df_write.select("S{}_module_id".format(j)).distinct().rdd.flatMap(lambda x: x).collect()
